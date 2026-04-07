@@ -10,6 +10,9 @@ autoscraper>=1.1
 pydantic>=2.0
 polars>=0.20
 
+# Dashboard
+streamlit>=1.30
+
 # CLI & utilities
 typer>=0.9
 rich>=13.0
