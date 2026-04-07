@@ -10,7 +10,7 @@ from config.settings import BATCH_SIZE, DEFAULT_CSV, LOGS_DIR
 from config.verticals import VERTICALS
 from core.deduplication import Deduplicator
 from core.models import Prospect, Source, Vertical
-from core.storage import append_csv, load_csv, save_csv
+from core.storage import load_csv, save_csv
 from sources import google_maps, google_play, google_search
 from sources import linkedin as linkedin_src
 from sources import website as website_src
@@ -156,33 +156,40 @@ def run_discovery(
     else:
         raw = discover_vertical(vertical, pages=pages)
 
-    # Dedup
+    # Dedup — append the actual prospect `p` (not the merged return value,
+    # which could be an already-stored record being merged into).
     new_prospects: list[Prospect] = []
     for p in raw:
         if dedup.contains(p):
             continue
-        added = dedup.add(p)
-        new_prospects.append(added)
+        dedup.add(p)
+        new_prospects.append(p)
         if max_prospects and len(new_prospects) >= max_prospects:
             break
 
     logger.info(f"Discovered {len(new_prospects)} new prospects (from {len(raw)} raw)")
 
-    # Enrich in batches, saving incrementally
+    def _persist() -> None:
+        """Write existing + new_prospects to the CSV as a single authoritative snapshot."""
+        save_csv(output, existing + new_prospects)
+
+    # Enrich in batches, persisting a full snapshot after each batch so we
+    # never lose data on crash — and always end with a final save_csv.
     if enrich and new_prospects:
-        batch: list[Prospect] = []
-        for p in new_prospects:
-            batch.append(p)
-            if len(batch) >= BATCH_SIZE:
-                enriched = enrich_prospects(batch, deep_web=True, use_linkedin=use_linkedin)
-                append_csv(output, enriched)
-                batch = []
-        if batch:
-            enriched = enrich_prospects(batch, deep_web=True, use_linkedin=use_linkedin)
-            append_csv(output, enriched)
+        for i in range(0, len(new_prospects), BATCH_SIZE):
+            batch = new_prospects[i : i + BATCH_SIZE]
+            enrich_prospects(batch, deep_web=True, use_linkedin=use_linkedin)
+            _persist()
     else:
         for p in new_prospects:
             p.score = score_prospect(p)
-        append_csv(output, new_prospects)
+
+    # Final save — ensures the complete deduped dataset (existing + newly
+    # discovered, scored) is written regardless of enrichment path taken.
+    _persist()
+    logger.info(
+        f"Saved {len(existing) + len(new_prospects)} total prospects to {output} "
+        f"({len(new_prospects)} new this run)"
+    )
 
     return new_prospects
