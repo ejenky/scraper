@@ -22,3 +22,19 @@ python-dotenv>=1.0
 # Optional / production
 tenacity>=8.0
 fake-useragent>=1.5
+
+# Outreach — AI email generation
+groq>=0.4
+
+# Outreach — email sending
+aiosmtplib>=3.0
+email-validator>=2.0
+premailer>=3.10
+jinja2>=3.1
+
+# Outreach — tracking server
+fastapi>=0.100
+uvicorn>=0.24
+
+# Outreach — async DB
+aiosqlite>=0.19

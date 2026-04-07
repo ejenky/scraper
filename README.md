@@ -1,6 +1,12 @@
-# 🚀 Rocket Brands Prospect Scraper
+# 🚀 Rocket Brands Scraper + Outreach
 
-Modular prospect discovery & enrichment for Rocket Brands Media. Finds potential media-buying clients across **iGaming, sports betting, crypto, mobile games, apps, prediction markets, esports, and fantasy sports** — then enriches with emails, decision-makers, socials, and affiliate-program signals. Ships with a Streamlit dashboard.
+End-to-end prospect discovery, enrichment, and AI-powered cold outreach for Rocket Brands Media.
+
+**Scraper:** finds potential media-buying clients across iGaming, sports betting, crypto, mobile games, apps, prediction markets, esports, and fantasy sports — then enriches with emails, decision-makers, socials, and affiliate-program signals.
+
+**Outreach:** generates personalized cold emails via Groq LLM (free tier), sends from rotating Gmail accounts with hard-capped rate limiting, tracks opens/clicks, and automates 3/7/14-day follow-up sequences.
+
+Both components ship with Streamlit dashboards.
 
 ## Quick Start
 
@@ -49,8 +55,92 @@ python cli.py export --input data/prospects.csv --output hot_leads.csv --min-sco
 
 ```bash
 ./run_scraper.sh      # Discover all verticals
-./run_dashboard.sh    # Start Streamlit dashboard
+./run_dashboard.sh    # Start scraper Streamlit dashboard
+./run_outreach.sh     # Start tracking server + outreach dashboard
 ```
+
+## Outreach System
+
+AI-generated cold email with rotating Gmail sending, open/click tracking, and automated follow-ups. Reads prospects from `data/prospects.csv` (scraper output).
+
+### Generate → preview → send → follow-up
+
+```bash
+source venv/bin/activate
+
+# 1. Generate AI-personalized drafts (uses Groq free tier)
+python outreach_cli.py generate --campaign "Casino Q2" --vertical casino --min-score 20
+
+# 2. Preview a few before sending
+python outreach_cli.py preview --campaign "Casino Q2" --limit 5
+
+# 3. Dry run
+python outreach_cli.py send --campaign "Casino Q2" --dry-run
+
+# 4. Send for real (respects rate limits + business hours)
+python outreach_cli.py send --campaign "Casino Q2"
+
+# 5. Campaign status
+python outreach_cli.py status --campaign "Casino Q2"
+
+# 6. Gmail account health
+python outreach_cli.py health
+
+# 7. Generate and send due follow-ups (3/7/14 days after initial)
+python outreach_cli.py followup --campaign "Casino Q2" --auto-send
+
+# 8. Manual reply tracking
+python outreach_cli.py reply prospect@example.com
+
+# 9. Unsubscribe
+python outreach_cli.py unsubscribe prospect@example.com
+
+# 10. Export campaign results
+python outreach_cli.py export --campaign "Casino Q2" --output results.csv
+```
+
+### Tracking server (port 8502)
+
+Serves the 1×1 tracking pixel and click-redirect endpoints. Must be running for open/click tracking to work.
+
+```bash
+uvicorn tracking_server:app --host 0.0.0.0 --port 8502
+# or
+python outreach_cli.py track-server
+```
+
+### Outreach dashboard (port 8503)
+
+```bash
+streamlit run outreach_dashboard.py --server.port 8503 --server.address 0.0.0.0
+```
+
+Shows: campaign metrics, open/click/reply rates, timeline chart, per-vertical performance, per-account usage, filtered email table, due-for-followup list, recent opens.
+
+### Deliverability rules (hard-coded)
+
+1. Max **25** emails/day per Gmail account (hard-capped at 30 regardless of env setting)
+2. Max **8** emails/hour per account
+3. Random **2–5 minute** delay between sends (never consistent intervals)
+4. **Business hours only**: 8am–6pm Mon–Fri
+5. **Plain text always included** (REQUIRED for deliverability)
+6. **No tracking pixel on initial email** — only added on follow-ups
+7. **No images, no attachments, no links** in initial emails
+8. **Subject line validation** — rejects ALL CAPS, `!`/`?`, emojis, >10 words
+9. **Unsubscribe check** before every send; `/u/<id>` endpoint for self-serve
+10. **Bounce check** before every send; heuristic detection on SMTP errors
+11. **Follow-ups threaded** — `Re:` subject + `In-Reply-To`/`References` headers
+12. **Word limit** on body: trimmed if >160 words
+
+### Gmail setup
+
+1. Enable 2-Step Verification on the Google account
+2. Go to https://myaccount.google.com/apppasswords
+3. Generate an App Password (Mail → Other)
+4. Put the 16-character password in `GMAIL_APP_PASSWORD_1` (never the regular password)
+5. Repeat for the second account if you have one
+
+The system works with 1 or 2 accounts. Two accounts doubles your daily send capacity (50 emails/day total).
 
 ### Long-running jobs
 
@@ -97,6 +187,9 @@ All keys are **optional** — the scraper runs in pure raw-scraping mode with no
 | `SCRAPER_API_KEY` | ScraperAPI residential proxy rotation | Optional | Pay-as-you-go |
 | `BRIGHTDATA_USERNAME/PASSWORD` | BrightData proxy rotation | Optional | Pay-as-you-go |
 | `OPENAI_API_KEY` | ScrapeGraphAI LLM extraction fallback | Optional | Pay-as-you-go |
+| `GROQ_API_KEY` | Llama 3.1 70B for email generation | Strongly recommended (outreach) | **Free** tier: 14k req/day |
+| `GMAIL_USER_1` / `GMAIL_APP_PASSWORD_1` | Sending Gmail account 1 | Required (outreach) | Free |
+| `GMAIL_USER_2` / `GMAIL_APP_PASSWORD_2` | Sending Gmail account 2 | Optional — doubles capacity | Free |
 
 Without any keys: Google Search uses raw scraping via Scrapling StealthyFetcher (slower, lower volume). Maps and Play Store work out of the box.
 
@@ -129,11 +222,24 @@ scraper/
 │   ├── proxy.py             # ScraperAPI / BrightData / file-based rotation
 │   └── browser.py           # Scrapling wrapper + httpx fallback
 ├── pipeline.py              # Discover → dedup → enrich → score → save
-├── cli.py                   # Typer + Rich CLI
-├── dashboard.py             # Streamlit dashboard
+├── cli.py                   # Scraper CLI (Typer + Rich)
+├── dashboard.py             # Scraper Streamlit dashboard (port 8501)
+├── outreach/
+│   ├── models.py            # EmailRecord, Campaign, SequenceStep, EmailStatus
+│   ├── config.py            # Env loading, Gmail accounts, rate limits
+│   ├── storage.py           # SQLite (campaigns, emails, tracking, unsub, bounces)
+│   ├── templates.py         # System prompt, spintax, validators
+│   ├── generator.py         # Groq LLM email generation + template fallback
+│   ├── sender.py            # Gmail SMTP with rotation + rate limiting
+│   ├── scheduler.py         # 3/7/14-day follow-up automation
+│   └── warmth.py            # Account health checks
+├── outreach_cli.py          # Outreach CLI
+├── outreach_dashboard.py    # Outreach Streamlit dashboard (port 8503)
+├── tracking_server.py       # FastAPI tracking pixel + click redirect (port 8502)
 ├── deploy.sh                # One-shot droplet deployment
 ├── run_scraper.sh           # Convenience runner
-├── run_dashboard.sh         # Convenience runner
+├── run_dashboard.sh         # Scraper dashboard runner
+├── run_outreach.sh          # Tracking + outreach dashboard runner
 └── tests/                   # pytest unit tests
 ```
 
