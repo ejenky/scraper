@@ -1,0 +1,15 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+venv/
+.venv/
+logs/
+*.log
+*.db
+prospects_*.csv
+enriched_*.csv
+models/
+.pytest_cache/
+.DS_Store
