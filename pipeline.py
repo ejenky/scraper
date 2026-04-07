@@ -171,24 +171,41 @@ def run_discovery(
 
     def _persist() -> None:
         """Write existing + new_prospects to the CSV as a single authoritative snapshot."""
+        output.parent.mkdir(parents=True, exist_ok=True)
         save_csv(output, existing + new_prospects)
 
-    # Enrich in batches, persisting a full snapshot after each batch so we
-    # never lose data on crash — and always end with a final save_csv.
+    # Score and SAVE IMMEDIATELY after dedup — before the (slow) enrichment
+    # stage begins. This guarantees discovered prospects are persisted even
+    # if enrichment crashes, is killed, or the process runs out of memory
+    # on a long website crawl.
+    for p in new_prospects:
+        if not p.score:
+            p.score = score_prospect(p)
+    _persist()
+    logger.info(
+        f"Pre-enrichment save: {len(existing) + len(new_prospects)} total prospects to {output} "
+        f"({len(new_prospects)} new this run)"
+    )
+
+    # Enrich in batches, re-persisting after each batch so we never lose
+    # incremental progress on crash.
     if enrich and new_prospects:
         for i in range(0, len(new_prospects), BATCH_SIZE):
             batch = new_prospects[i : i + BATCH_SIZE]
-            enrich_prospects(batch, deep_web=True, use_linkedin=use_linkedin)
+            try:
+                enrich_prospects(batch, deep_web=True, use_linkedin=use_linkedin)
+            except Exception as e:
+                logger.warning(f"Batch enrichment error: {e}")
+            # Re-score enriched prospects in place and persist
+            for p in batch:
+                p.score = score_prospect(p)
             _persist()
-    else:
-        for p in new_prospects:
-            p.score = score_prospect(p)
+            logger.info(f"Enriched batch {i // BATCH_SIZE + 1} — saved {len(existing) + len(new_prospects)} total")
 
-    # Final save — ensures the complete deduped dataset (existing + newly
-    # discovered, scored) is written regardless of enrichment path taken.
+    # Final save
     _persist()
     logger.info(
-        f"Saved {len(existing) + len(new_prospects)} total prospects to {output} "
+        f"FINAL save: {len(existing) + len(new_prospects)} total prospects to {output} "
         f"({len(new_prospects)} new this run)"
     )
 
